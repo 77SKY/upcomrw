@@ -15,7 +15,7 @@ services:
           name: upcomrw-db
           property: connectionString
 
-  - type: static
+  - type: static_site
     name: upcomrw-frontend
     rootDir: frontend
     buildCommand: npm install && npm run build
