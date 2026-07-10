@@ -30,7 +30,7 @@ services:
         fromService:
           type: web
           name: upcomrw-backend
-          property: url
+          property: host
 
 databases:
   - name: upcomrw-db
