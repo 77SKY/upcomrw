@@ -779,10 +779,31 @@ app.get('/api/admin/stats', authenticateToken, adminOnly, async (req, res) => {
 
 // ── Start ────────────────────────────────────────
 
-initDB()
-  .then(() => app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`)))
-  .catch(err => {
-    console.error('PostgreSQL connection failed:', err.message);
-    console.error('Make sure DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD/DB_NAME are set correctly.');
-    process.exit(1);
-  });
+let dbReady = false;
+
+async function ensureDB() {
+  if (!dbReady) {
+    await initDB();
+    dbReady = true;
+  }
+}
+
+app.use(async (req, res, next) => {
+  try {
+    await ensureDB();
+    next();
+  } catch (err) {
+    res.status(500).json({ error: 'Database not ready' });
+  }
+});
+
+if (require.main === module) {
+  initDB()
+    .then(() => app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`)))
+    .catch(err => {
+      console.error('PostgreSQL connection failed:', err.message);
+      process.exit(1);
+    });
+}
+
+module.exports = app;
