@@ -15,11 +15,16 @@ services:
           name: upcomrw-db
           property: connectionString
 
-  - type: static_site
+  - type: web
     name: upcomrw-frontend
+    runtime: static
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
     envVars:
       - key: VITE_API_URL
         fromService:
