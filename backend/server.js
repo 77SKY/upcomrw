@@ -8,15 +8,15 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'upcomrw-tutoring-secret-key-2026';
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || undefined,
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'tutoring_db',
-  port: process.env.DB_PORT || 5432,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
-});
+const dbUrl = process.env.DATABASE_URL
+  ? process.env.DATABASE_URL.replace(/&?channel_binding=require&?/g, '').replace(/\?$/, '')
+  : undefined;
+
+const poolConfig = dbUrl
+  ? { connectionString: dbUrl, ssl: { rejectUnauthorized: false } }
+  : { host: process.env.DB_HOST || 'localhost', user: process.env.DB_USER || 'root', password: process.env.DB_PASSWORD || '', database: process.env.DB_NAME || 'tutoring_db', port: process.env.DB_PORT || 5432, ssl: false };
+
+const pool = new Pool(poolConfig);
 
 app.use(cors());
 app.use(express.json());
@@ -779,22 +779,29 @@ app.get('/api/admin/stats', authenticateToken, adminOnly, async (req, res) => {
 
 // ── Start ────────────────────────────────────────
 
-let dbReady = false;
+let dbInitDone = false;
+let dbInitPromise = null;
 
-async function ensureDB() {
-  if (!dbReady) {
-    await initDB();
-    dbReady = true;
+function ensureDB() {
+  if (dbInitDone) return Promise.resolve();
+  if (!dbInitPromise) {
+    dbInitPromise = initDB()
+      .then(() => { dbInitDone = true; })
+      .catch(err => { console.error('DB init failed:', err); dbInitPromise = null; throw err; });
   }
+  return dbInitPromise;
 }
 
-app.use(async (req, res, next) => {
-  try {
-    await ensureDB();
-    next();
-  } catch (err) {
-    res.status(500).json({ error: 'Database not ready' });
-  }
+if (process.env.DATABASE_URL) {
+  ensureDB().catch(() => {});
+}
+
+app.use((req, res, next) => {
+  if (!process.env.DATABASE_URL || dbInitDone) return next();
+  ensureDB().then(() => next()).catch(err => {
+    console.error('DB middleware error:', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Database not ready' });
+  });
 });
 
 if (require.main === module) {
