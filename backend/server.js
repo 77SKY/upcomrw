@@ -787,19 +787,15 @@ function ensureDB() {
   if (!dbInitPromise) {
     dbInitPromise = initDB()
       .then(() => { dbInitDone = true; })
-      .catch(err => { console.error('DB init failed:', err); dbInitPromise = null; throw err; });
+      .catch(err => { console.error('DB init failed:', err.message); dbInitPromise = null; throw err; });
   }
   return dbInitPromise;
-}
-
-if (process.env.DATABASE_URL) {
-  ensureDB().catch(() => {});
 }
 
 app.use((req, res, next) => {
   if (!process.env.DATABASE_URL || dbInitDone) return next();
   ensureDB().then(() => next()).catch(err => {
-    console.error('DB middleware error:', err);
+    console.error('DB middleware error:', err.message);
     if (!res.headersSent) res.status(500).json({ error: 'Database not ready' });
   });
 });
