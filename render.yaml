@@ -10,14 +10,10 @@ services:
         value: production
       - key: JWT_SECRET
         generateValue: true
-      - key: DB_HOST
-        sync: false
-      - key: DB_USER
-        sync: false
-      - key: DB_PASSWORD
-        sync: false
-      - key: DB_NAME
-        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: upcomrw-db
+          property: connectionString
 
   - type: static
     name: upcomrw-frontend
@@ -30,3 +26,8 @@ services:
           type: web
           name: upcomrw-backend
           property: url
+
+databases:
+  - name: upcomrw-db
+    plan: free
+    databaseName: tutoring_db

@@ -2,88 +2,139 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const mysql = require('mysql2/promise');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'upcomrw-tutoring-secret-key-2026';
 
-const DB_CONFIG = {
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || undefined,
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'tutoring_db',
-};
-
-let pool;
+  port: process.env.DB_PORT || 5432,
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+});
 
 app.use(cors());
 app.use(express.json());
 
 async function initDB() {
-  pool = await mysql.createPool(DB_CONFIG);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      password VARCHAR(255) NOT NULL,
+      role VARCHAR(20) DEFAULT 'user' CHECK (role IN ('user', 'admin', 'tutor')),
+      status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
 
-  const [rows] = await pool.query("SELECT id FROM users WHERE email = 'admin@upcomrw.com'");
-  if (rows.length === 0) {
-    const hashed = bcrypt.hashSync('olivier@123', 10);
-    await pool.query('INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)', ['Admin', 'admin@upcomrw.com', hashed, 'admin']);
+  const { rows: existingAdmin } = await pool.query("SELECT id FROM users WHERE email = 'admin@upcomrw.com'");
+  if (existingAdmin.length === 0) {
+    const hashed = bcrypt.hashSync('admin123', 10);
+    await pool.query('INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4)', ['Admin', 'admin@upcomrw.com', hashed, 'admin']);
     console.log('Default admin user created');
   }
 
-  const [cols] = await pool.query("SHOW COLUMNS FROM notifications LIKE 'target_user_id'");
-  if (cols.length === 0) {
-    await pool.query('ALTER TABLE notifications ADD COLUMN target_user_id INT NULL AFTER user_id');
-    await pool.query('ALTER TABLE notifications ADD FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE CASCADE');
-  }
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reports (
+      id SERIAL PRIMARY KEY,
+      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title VARCHAR(255) NOT NULL,
+      description TEXT NOT NULL,
+      status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'resolved')),
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id SERIAL PRIMARY KEY,
+      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      target_user_id INT REFERENCES users(id) ON DELETE CASCADE,
+      title VARCHAR(255) NOT NULL,
+      message TEXT NOT NULL,
+      is_read BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS notification_reads (
-      user_id INT NOT NULL,
-      notification_id INT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (user_id, notification_id),
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE
+      user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      notification_id INT NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (user_id, notification_id)
     )
   `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS report_replies (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      report_id INT NOT NULL,
-      admin_id INT NOT NULL,
+      id SERIAL PRIMARY KEY,
+      report_id INT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+      admin_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       reply TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE,
-      FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE CASCADE
+      created_at TIMESTAMP DEFAULT NOW()
     )
   `);
 
-  await pool.query("UPDATE users SET role = 'tutor' WHERE role = 'teacher'");
-  await pool.query("ALTER TABLE users MODIFY COLUMN role ENUM('user', 'admin', 'tutor') DEFAULT 'user'").catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notification_replies (
+      id SERIAL PRIMARY KEY,
+      notification_id INT NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+      admin_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      reply TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
 
-  const [statusCol] = await pool.query("SHOW COLUMNS FROM users LIKE 'status'");
-  if (statusCol.length === 0) {
-    await pool.query("ALTER TABLE users ADD COLUMN status ENUM('active', 'inactive') DEFAULT 'active' AFTER role");
-  }
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tutors (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      phone VARCHAR(50),
+      subject VARCHAR(255) NOT NULL,
+      experience INT DEFAULT 0,
+      bio TEXT,
+      status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS learners (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      phone VARCHAR(50),
+      grade VARCHAR(100),
+      subject_interest VARCHAR(255),
+      status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sessions (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      tutor_id INT NOT NULL,
-      learner_id INT NOT NULL,
-      session_date DATETIME NOT NULL,
+      id SERIAL PRIMARY KEY,
+      tutor_id INT NOT NULL REFERENCES tutors(id) ON DELETE CASCADE,
+      learner_id INT NOT NULL REFERENCES learners(id) ON DELETE CASCADE,
+      session_date TIMESTAMP NOT NULL,
       duration INT DEFAULT 60,
       subject VARCHAR(255) NOT NULL,
       notes TEXT,
-      status ENUM('scheduled', 'completed', 'cancelled') DEFAULT 'scheduled',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (tutor_id) REFERENCES tutors(id) ON DELETE CASCADE,
-      FOREIGN KEY (learner_id) REFERENCES learners(id) ON DELETE CASCADE
+      status VARCHAR(20) DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'completed', 'cancelled')),
+      created_at TIMESTAMP DEFAULT NOW()
     )
   `);
 
-  console.log('MySQL connected');
+  console.log('PostgreSQL connected');
 }
 
 function authenticateToken(req, res, next) {
@@ -100,7 +151,8 @@ function authenticateToken(req, res, next) {
 
 async function checkUserActive(req, res, next) {
   try {
-    const [[user]] = await pool.query('SELECT status FROM users WHERE id = ?', [req.user.id]);
+    const { rows } = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
+    const user = rows[0];
     if (!user || user.status === 'inactive') {
       return res.status(403).json({ error: 'Your account has been deactivated. Please contact support for assistance.', deactivated: true, contact: { phone: '0790647563', email: 'upcomrw@gmail.com' } });
     }
@@ -130,14 +182,17 @@ app.post('/api/auth/register', async (req, res) => {
     const userRole = role === 'tutor' ? 'tutor' : 'user';
     if (!['user', 'tutor'].includes(userRole)) return res.status(400).json({ error: 'Invalid role' });
 
-    const [existing] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
+    const { rows: existing } = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
     if (existing.length > 0) return res.status(400).json({ error: 'Email already registered' });
 
     const hashed = bcrypt.hashSync(password, 10);
-    const [result] = await pool.query('INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)', [name, email, hashed, userRole]);
+    const { rows: result } = await pool.query(
+      'INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id',
+      [name, email, hashed, userRole]
+    );
 
-    const token = jwt.sign({ id: result.insertId, name, email, role: userRole }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, user: { id: result.insertId, name, email, role: userRole } });
+    const token = jwt.sign({ id: result[0].id, name, email, role: userRole }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ token, user: { id: result[0].id, name, email, role: userRole } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -149,7 +204,7 @@ app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'All fields are required' });
 
-    const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     if (rows.length === 0) return res.status(400).json({ error: 'Invalid credentials' });
 
     const user = rows[0];
@@ -169,7 +224,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT id, name, email, role, status, created_at FROM users WHERE id = ?', [req.user.id]);
+    const { rows } = await pool.query('SELECT id, name, email, role, status, created_at FROM users WHERE id = $1', [req.user.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
     if (rows[0].status === 'inactive') {
       return res.status(403).json({ error: 'Your account has been deactivated. Please contact support for assistance.', deactivated: true, contact: { phone: '0790647563', email: 'upcomrw@gmail.com' } });
@@ -186,13 +241,13 @@ app.put('/api/auth/password', authenticateToken, async (req, res) => {
     if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both fields are required' });
     if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
 
-    const [rows] = await pool.query('SELECT password FROM users WHERE id = ?', [req.user.id]);
+    const { rows } = await pool.query('SELECT password FROM users WHERE id = $1', [req.user.id]);
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
 
     if (!bcrypt.compareSync(currentPassword, rows[0].password)) return res.status(400).json({ error: 'Current password is incorrect' });
 
     const hashed = bcrypt.hashSync(newPassword, 10);
-    await pool.query('UPDATE users SET password = ? WHERE id = ?', [hashed, req.user.id]);
+    await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hashed, req.user.id]);
     res.json({ success: true, message: 'Password updated successfully' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -206,8 +261,11 @@ app.post('/api/reports', authenticateToken, async (req, res) => {
     const { title, description } = req.body;
     if (!title || !description) return res.status(400).json({ error: 'Title and description are required' });
 
-    const [result] = await pool.query('INSERT INTO reports (user_id, title, description) VALUES (?, ?, ?)', [req.user.id, title, description]);
-    res.json({ id: result.insertId, title, description, status: 'pending' });
+    const { rows } = await pool.query(
+      'INSERT INTO reports (user_id, title, description) VALUES ($1, $2, $3) RETURNING id, status',
+      [req.user.id, title, description]
+    );
+    res.json({ id: rows[0].id, title, description, status: rows[0].status });
   } catch (err) {
     console.error('Create report error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -218,20 +276,22 @@ app.get('/api/reports', authenticateToken, async (req, res) => {
   try {
     let reports;
     if (req.user.role === 'admin') {
-      [reports] = await pool.query(`
+      const { rows } = await pool.query(`
         SELECT r.*, u.name AS user_name, u.email AS user_email, u.role AS user_role
         FROM reports r JOIN users u ON r.user_id = u.id
         ORDER BY r.created_at DESC
       `);
+      reports = rows;
     } else {
-      [reports] = await pool.query('SELECT * FROM reports WHERE user_id = ? ORDER BY created_at DESC', [req.user.id]);
+      const { rows } = await pool.query('SELECT * FROM reports WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
+      reports = rows;
     }
 
     for (const r of reports) {
-      const [replies] = await pool.query(`
+      const { rows: replies } = await pool.query(`
         SELECT rr.*, u.name AS admin_name
         FROM report_replies rr JOIN users u ON rr.admin_id = u.id
-        WHERE rr.report_id = ? ORDER BY rr.created_at ASC
+        WHERE rr.report_id = $1 ORDER BY rr.created_at ASC
       `, [r.id]);
       r.replies = replies;
     }
@@ -248,17 +308,20 @@ app.post('/api/reports/:id/reply', authenticateToken, adminOnly, async (req, res
     const { reply } = req.body;
     if (!reply) return res.status(400).json({ error: 'Reply is required' });
 
-    const [report] = await pool.query('SELECT id, user_id, title FROM reports WHERE id = ?', [req.params.id]);
+    const { rows: report } = await pool.query('SELECT id, user_id, title FROM reports WHERE id = $1', [req.params.id]);
     if (report.length === 0) return res.status(404).json({ error: 'Report not found' });
 
-    const [result] = await pool.query('INSERT INTO report_replies (report_id, admin_id, reply) VALUES (?, ?, ?)', [req.params.id, req.user.id, reply]);
+    const { rows: result } = await pool.query(
+      'INSERT INTO report_replies (report_id, admin_id, reply) VALUES ($1, $2, $3) RETURNING id',
+      [req.params.id, req.user.id, reply]
+    );
 
     await pool.query(
-      'INSERT INTO notifications (user_id, target_user_id, title, message) VALUES (?, ?, ?, ?)',
+      'INSERT INTO notifications (user_id, target_user_id, title, message) VALUES ($1, $2, $3, $4)',
       [req.user.id, report[0].user_id, `Reply on your report: ${report[0].title}`, reply]
     );
 
-    res.json({ id: result.insertId, reply, admin_name: req.user.name });
+    res.json({ id: result[0].id, reply, admin_name: req.user.name });
   } catch (err) {
     console.error('Report reply error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -270,7 +333,7 @@ app.route('/api/reports/:id')
     try {
       const { status } = req.body;
       if (!['pending', 'in_progress', 'resolved'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
-      await pool.query('UPDATE reports SET status = ? WHERE id = ?', [status, req.params.id]);
+      await pool.query('UPDATE reports SET status = $1 WHERE id = $2', [status, req.params.id]);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: 'Server error' });
@@ -278,10 +341,10 @@ app.route('/api/reports/:id')
   })
   .delete(authenticateToken, async (req, res) => {
     try {
-      const [rows] = await pool.query('SELECT user_id FROM reports WHERE id = ?', [req.params.id]);
+      const { rows } = await pool.query('SELECT user_id FROM reports WHERE id = $1', [req.params.id]);
       if (rows.length === 0) return res.status(404).json({ error: 'Report not found' });
       if (req.user.role !== 'admin' && rows[0].user_id !== req.user.id) return res.status(403).json({ error: 'Not authorized' });
-      await pool.query('DELETE FROM reports WHERE id = ?', [req.params.id]);
+      await pool.query('DELETE FROM reports WHERE id = $1', [req.params.id]);
       res.json({ success: true });
     } catch (err) {
       console.error('Delete report error:', err);
@@ -296,11 +359,11 @@ app.post('/api/notifications', authenticateToken, adminOnly, async (req, res) =>
     const { title, message, target_user_id } = req.body;
     if (!title || !message) return res.status(400).json({ error: 'Title and message are required' });
 
-    const [result] = await pool.query(
-      'INSERT INTO notifications (user_id, title, message, target_user_id) VALUES (?, ?, ?, ?)',
+    const { rows } = await pool.query(
+      'INSERT INTO notifications (user_id, title, message, target_user_id) VALUES ($1, $2, $3, $4) RETURNING id',
       [req.user.id, title, message, target_user_id || null]
     );
-    res.json({ id: result.insertId, title, message, target_user_id: target_user_id || null, is_read: 0 });
+    res.json({ id: rows[0].id, title, message, target_user_id: target_user_id || null, is_read: false });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -310,49 +373,52 @@ app.get('/api/notifications', authenticateToken, async (req, res) => {
   try {
     let notifications;
     if (req.user.role === 'admin') {
-      [notifications] = await pool.query(`
+      const { rows } = await pool.query(`
         SELECT n.*, u.name AS user_name, u.email AS user_email, u.role AS user_role,
           CASE WHEN n.target_user_id IS NULL THEN 'broadcast' ELSE 'targeted' END AS notif_type,
           (SELECT COUNT(*) FROM notification_reads WHERE notification_id = n.id) AS read_count
         FROM notifications n JOIN users u ON n.user_id = u.id
         ORDER BY n.created_at DESC
       `);
+      notifications = rows;
     } else {
-      [notifications] = await pool.query(`
+      const { rows } = await pool.query(`
         SELECT n.*, u.name AS user_name,
-          CASE WHEN nr.user_id IS NOT NULL THEN 1 ELSE n.is_read END AS is_read
+          CASE WHEN nr.user_id IS NOT NULL THEN TRUE ELSE n.is_read END AS is_read
         FROM notifications n
         JOIN users u ON n.user_id = u.id
-        LEFT JOIN notification_reads nr ON nr.notification_id = n.id AND nr.user_id = ?
+        LEFT JOIN notification_reads nr ON nr.notification_id = n.id AND nr.user_id = $1
         WHERE (n.target_user_id IS NULL)
-           OR (n.target_user_id = ?)
-           OR (n.user_id = ?)
+           OR (n.target_user_id = $1)
+           OR (n.user_id = $1)
         ORDER BY n.created_at DESC
-      `, [req.user.id, req.user.id, req.user.id]);
+      `, [req.user.id]);
+      notifications = rows;
     }
 
     for (const n of notifications) {
-      const [replies] = await pool.query(`
+      const { rows: replies } = await pool.query(`
         SELECT nr.*, u.name AS admin_name
         FROM notification_replies nr JOIN users u ON nr.admin_id = u.id
-        WHERE nr.notification_id = ? ORDER BY nr.created_at ASC
+        WHERE nr.notification_id = $1 ORDER BY nr.created_at ASC
       `, [n.id]);
       n.replies = replies;
     }
 
     res.json(notifications);
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 app.put('/api/notifications/:id/read', authenticateToken, async (req, res) => {
   try {
-    const [notifs] = await pool.query('SELECT * FROM notifications WHERE id = ?', [req.params.id]);
+    const { rows: notifs } = await pool.query('SELECT * FROM notifications WHERE id = $1', [req.params.id]);
     if (notifs.length === 0) return res.status(404).json({ error: 'Notification not found' });
 
-    await pool.query('UPDATE notifications SET is_read = 1 WHERE id = ? AND (user_id = ? OR target_user_id = ?)', [req.params.id, req.user.id, req.user.id]);
-    await pool.query('INSERT IGNORE INTO notification_reads (user_id, notification_id) VALUES (?, ?)', [req.user.id, req.params.id]);
+    await pool.query('UPDATE notifications SET is_read = TRUE WHERE id = $1 AND (user_id = $2 OR target_user_id = $2)', [req.params.id, req.user.id]);
+    await pool.query('INSERT INTO notification_reads (user_id, notification_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [req.user.id, req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -365,24 +431,25 @@ app.get('/api/notifications/unread-count', authenticateToken, async (req, res) =
     let pendingReports = 0;
 
     if (req.user.role === 'admin') {
-      const [[{ count: nr }]] = await pool.query("SELECT COUNT(*) AS count FROM reports WHERE status != 'resolved'");
-      pendingReports = nr;
+      const { rows } = await pool.query("SELECT COUNT(*) AS count FROM reports WHERE status != 'resolved'");
+      pendingReports = parseInt(rows[0].count);
     } else {
-      const [[{ count: unr }]] = await pool.query(`
+      const { rows: unr } = await pool.query(`
         SELECT COUNT(*) AS count FROM notifications n
-        LEFT JOIN notification_reads nr ON nr.notification_id = n.id AND nr.user_id = ?
-        WHERE (n.target_user_id IS NULL OR n.target_user_id = ? OR n.user_id = ?)
+        LEFT JOIN notification_reads nr ON nr.notification_id = n.id AND nr.user_id = $1
+        WHERE (n.target_user_id IS NULL OR n.target_user_id = $1 OR n.user_id = $1)
           AND nr.user_id IS NULL
-          AND n.is_read = 0
-      `, [req.user.id, req.user.id, req.user.id]);
-      unreadNotifications = unr;
+          AND n.is_read = FALSE
+      `, [req.user.id]);
+      unreadNotifications = parseInt(unr[0].count);
 
-      const [[{ count: pr }]] = await pool.query("SELECT COUNT(*) AS count FROM reports WHERE user_id = ? AND status != 'resolved'", [req.user.id]);
-      pendingReports = pr;
+      const { rows: pr } = await pool.query("SELECT COUNT(*) AS count FROM reports WHERE user_id = $1 AND status != 'resolved'", [req.user.id]);
+      pendingReports = parseInt(pr[0].count);
     }
 
     res.json({ unreadNotifications, pendingReports });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -392,8 +459,11 @@ app.post('/api/notifications/:id/reply', authenticateToken, adminOnly, async (re
     const { reply } = req.body;
     if (!reply) return res.status(400).json({ error: 'Reply is required' });
 
-    const [result] = await pool.query('INSERT INTO notification_replies (notification_id, admin_id, reply) VALUES (?, ?, ?)', [req.params.id, req.user.id, reply]);
-    res.json({ id: result.insertId, reply, admin_name: req.user.name });
+    const { rows } = await pool.query(
+      'INSERT INTO notification_replies (notification_id, admin_id, reply) VALUES ($1, $2, $3) RETURNING id',
+      [req.params.id, req.user.id, reply]
+    );
+    res.json({ id: rows[0].id, reply, admin_name: req.user.name });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -402,7 +472,7 @@ app.post('/api/notifications/:id/reply', authenticateToken, adminOnly, async (re
 app.route('/api/notifications/:id')
   .delete(authenticateToken, async (req, res) => {
     try {
-      const [rows] = await pool.query('SELECT user_id, target_user_id FROM notifications WHERE id = ?', [req.params.id]);
+      const { rows } = await pool.query('SELECT user_id, target_user_id FROM notifications WHERE id = $1', [req.params.id]);
       if (rows.length === 0) return res.status(404).json({ error: 'Notification not found' });
       const n = rows[0];
       const isAdmin = req.user.role === 'admin';
@@ -410,7 +480,7 @@ app.route('/api/notifications/:id')
       const isTarget = n.target_user_id !== null && n.target_user_id === req.user.id;
       const isBroadcast = n.target_user_id === null;
       if (!isAdmin && !isCreator && !isTarget && !isBroadcast) return res.status(403).json({ error: 'Not authorized' });
-      await pool.query('DELETE FROM notifications WHERE id = ?', [req.params.id]);
+      await pool.query('DELETE FROM notifications WHERE id = $1', [req.params.id]);
       res.json({ success: true });
     } catch (err) {
       console.error('Delete notification error:', err);
@@ -422,13 +492,13 @@ app.route('/api/notifications/:id')
 
 app.get('/api/tutors', authenticateToken, async (req, res) => {
   try {
-    let tutors;
+    let result;
     if (req.user.role === 'admin') {
-      [tutors] = await pool.query('SELECT * FROM tutors ORDER BY created_at DESC');
+      result = await pool.query('SELECT * FROM tutors ORDER BY created_at DESC');
     } else {
-      [tutors] = await pool.query("SELECT * FROM tutors WHERE status = 'active' ORDER BY created_at DESC");
+      result = await pool.query("SELECT * FROM tutors WHERE status = 'active' ORDER BY created_at DESC");
     }
-    res.json(tutors);
+    res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -439,14 +509,14 @@ app.post('/api/tutors', authenticateToken, adminOnly, async (req, res) => {
     const { name, email, phone, subject, experience, bio } = req.body;
     if (!name || !email || !subject) return res.status(400).json({ error: 'Name, email, and subject are required' });
 
-    const [existing] = await pool.query('SELECT id FROM tutors WHERE email = ?', [email]);
+    const { rows: existing } = await pool.query('SELECT id FROM tutors WHERE email = $1', [email]);
     if (existing.length > 0) return res.status(400).json({ error: 'Email already exists' });
 
-    const [result] = await pool.query(
-      'INSERT INTO tutors (name, email, phone, subject, experience, bio) VALUES (?, ?, ?, ?, ?, ?)',
+    const { rows } = await pool.query(
+      'INSERT INTO tutors (name, email, phone, subject, experience, bio) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
       [name, email, phone || '', subject, experience || 0, bio || '']
     );
-    res.json({ id: result.insertId, name, email, phone, subject, experience, bio, status: 'active' });
+    res.json({ id: rows[0].id, name, email, phone, subject, experience, bio, status: 'active' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -454,14 +524,14 @@ app.post('/api/tutors', authenticateToken, adminOnly, async (req, res) => {
 
 app.get('/api/tutors/:id', authenticateToken, async (req, res) => {
   try {
-    let rows;
+    let result;
     if (req.user.role === 'admin') {
-      [rows] = await pool.query('SELECT * FROM tutors WHERE id = ?', [req.params.id]);
+      result = await pool.query('SELECT * FROM tutors WHERE id = $1', [req.params.id]);
     } else {
-      [rows] = await pool.query("SELECT * FROM tutors WHERE id = ? AND status = 'active'", [req.params.id]);
+      result = await pool.query("SELECT * FROM tutors WHERE id = $1 AND status = 'active'", [req.params.id]);
     }
-    if (rows.length === 0) return res.status(404).json({ error: 'Tutor not found' });
-    res.json(rows[0]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Tutor not found' });
+    res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -474,7 +544,7 @@ app.put('/api/tutors/:id', authenticateToken, adminOnly, async (req, res) => {
     if (status && !['active', 'inactive'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
 
     await pool.query(
-      'UPDATE tutors SET name = ?, email = ?, phone = ?, subject = ?, experience = ?, bio = ?, status = COALESCE(?, status) WHERE id = ?',
+      'UPDATE tutors SET name = $1, email = $2, phone = $3, subject = $4, experience = $5, bio = $6, status = COALESCE($7, status) WHERE id = $8',
       [name, email, phone || '', subject, experience || 0, bio || '', status || null, req.params.id]
     );
     res.json({ success: true });
@@ -485,7 +555,7 @@ app.put('/api/tutors/:id', authenticateToken, adminOnly, async (req, res) => {
 
 app.delete('/api/tutors/:id', authenticateToken, adminOnly, async (req, res) => {
   try {
-    await pool.query('DELETE FROM tutors WHERE id = ?', [req.params.id]);
+    await pool.query('DELETE FROM tutors WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -496,13 +566,13 @@ app.delete('/api/tutors/:id', authenticateToken, adminOnly, async (req, res) => 
 
 app.get('/api/learners', authenticateToken, async (req, res) => {
   try {
-    let learners;
+    let result;
     if (req.user.role === 'admin') {
-      [learners] = await pool.query('SELECT * FROM learners ORDER BY created_at DESC');
+      result = await pool.query('SELECT * FROM learners ORDER BY created_at DESC');
     } else {
-      [learners] = await pool.query("SELECT * FROM learners WHERE status = 'active' ORDER BY created_at DESC");
+      result = await pool.query("SELECT * FROM learners WHERE status = 'active' ORDER BY created_at DESC");
     }
-    res.json(learners);
+    res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -513,14 +583,14 @@ app.post('/api/learners', authenticateToken, adminOnly, async (req, res) => {
     const { name, email, phone, grade, subject_interest } = req.body;
     if (!name || !email) return res.status(400).json({ error: 'Name and email are required' });
 
-    const [existing] = await pool.query('SELECT id FROM learners WHERE email = ?', [email]);
+    const { rows: existing } = await pool.query('SELECT id FROM learners WHERE email = $1', [email]);
     if (existing.length > 0) return res.status(400).json({ error: 'Email already exists' });
 
-    const [result] = await pool.query(
-      'INSERT INTO learners (name, email, phone, grade, subject_interest) VALUES (?, ?, ?, ?, ?)',
+    const { rows } = await pool.query(
+      'INSERT INTO learners (name, email, phone, grade, subject_interest) VALUES ($1, $2, $3, $4, $5) RETURNING id',
       [name, email, phone || '', grade || '', subject_interest || '']
     );
-    res.json({ id: result.insertId, name, email, phone, grade, subject_interest, status: 'active' });
+    res.json({ id: rows[0].id, name, email, phone, grade, subject_interest, status: 'active' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -528,14 +598,14 @@ app.post('/api/learners', authenticateToken, adminOnly, async (req, res) => {
 
 app.get('/api/learners/:id', authenticateToken, async (req, res) => {
   try {
-    let rows;
+    let result;
     if (req.user.role === 'admin') {
-      [rows] = await pool.query('SELECT * FROM learners WHERE id = ?', [req.params.id]);
+      result = await pool.query('SELECT * FROM learners WHERE id = $1', [req.params.id]);
     } else {
-      [rows] = await pool.query("SELECT * FROM learners WHERE id = ? AND status = 'active'", [req.params.id]);
+      result = await pool.query("SELECT * FROM learners WHERE id = $1 AND status = 'active'", [req.params.id]);
     }
-    if (rows.length === 0) return res.status(404).json({ error: 'Learner not found' });
-    res.json(rows[0]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Learner not found' });
+    res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -548,7 +618,7 @@ app.put('/api/learners/:id', authenticateToken, adminOnly, async (req, res) => {
     if (status && !['active', 'inactive'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
 
     await pool.query(
-      'UPDATE learners SET name = ?, email = ?, phone = ?, grade = ?, subject_interest = ?, status = COALESCE(?, status) WHERE id = ?',
+      'UPDATE learners SET name = $1, email = $2, phone = $3, grade = $4, subject_interest = $5, status = COALESCE($6, status) WHERE id = $7',
       [name, email, phone || '', grade || '', subject_interest || '', status || null, req.params.id]
     );
     res.json({ success: true });
@@ -559,7 +629,7 @@ app.put('/api/learners/:id', authenticateToken, adminOnly, async (req, res) => {
 
 app.delete('/api/learners/:id', authenticateToken, adminOnly, async (req, res) => {
   try {
-    await pool.query('DELETE FROM learners WHERE id = ?', [req.params.id]);
+    await pool.query('DELETE FROM learners WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -570,14 +640,14 @@ app.delete('/api/learners/:id', authenticateToken, adminOnly, async (req, res) =
 
 app.get('/api/sessions', authenticateToken, async (req, res) => {
   try {
-    const [sessions] = await pool.query(`
+    const { rows } = await pool.query(`
       SELECT s.*, t.name AS tutor_name, t.subject AS tutor_subject, l.name AS learner_name, l.grade AS learner_grade
       FROM sessions s
       JOIN tutors t ON s.tutor_id = t.id
       JOIN learners l ON s.learner_id = l.id
       ORDER BY s.session_date DESC
     `);
-    res.json(sessions);
+    res.json(rows);
   } catch (err) {
     console.error('Get sessions error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -589,11 +659,11 @@ app.post('/api/sessions', authenticateToken, tutorOrAdminOnly, async (req, res) 
     const { tutor_id, learner_id, session_date, duration, subject, notes } = req.body;
     if (!tutor_id || !learner_id || !session_date || !subject) return res.status(400).json({ error: 'Tutor, learner, date, and subject are required' });
 
-    const [result] = await pool.query(
-      'INSERT INTO sessions (tutor_id, learner_id, session_date, duration, subject, notes) VALUES (?, ?, ?, ?, ?, ?)',
+    const { rows } = await pool.query(
+      'INSERT INTO sessions (tutor_id, learner_id, session_date, duration, subject, notes) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, status',
       [tutor_id, learner_id, session_date, duration || 60, subject, notes || '']
     );
-    res.json({ id: result.insertId, tutor_id, learner_id, session_date, duration: duration || 60, subject, notes: notes || '', status: 'scheduled' });
+    res.json({ id: rows[0].id, tutor_id, learner_id, session_date, duration: duration || 60, subject, notes: notes || '', status: rows[0].status });
   } catch (err) {
     console.error('Create session error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -606,7 +676,7 @@ app.put('/api/sessions/:id', authenticateToken, tutorOrAdminOnly, async (req, re
     if (status && !['scheduled', 'completed', 'cancelled'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
 
     await pool.query(
-      'UPDATE sessions SET tutor_id = ?, learner_id = ?, session_date = ?, duration = ?, subject = ?, notes = ?, status = COALESCE(?, status) WHERE id = ?',
+      'UPDATE sessions SET tutor_id = $1, learner_id = $2, session_date = $3, duration = $4, subject = $5, notes = $6, status = COALESCE($7, status) WHERE id = $8',
       [tutor_id, learner_id, session_date, duration, subject, notes || '', status || null, req.params.id]
     );
     res.json({ success: true });
@@ -618,7 +688,7 @@ app.put('/api/sessions/:id', authenticateToken, tutorOrAdminOnly, async (req, re
 
 app.delete('/api/sessions/:id', authenticateToken, tutorOrAdminOnly, async (req, res) => {
   try {
-    await pool.query('DELETE FROM sessions WHERE id = ?', [req.params.id]);
+    await pool.query('DELETE FROM sessions WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     console.error('Delete session error:', err);
@@ -630,8 +700,8 @@ app.delete('/api/sessions/:id', authenticateToken, tutorOrAdminOnly, async (req,
 
 app.get('/api/admin/users', authenticateToken, adminOnly, async (req, res) => {
   try {
-    const [users] = await pool.query("SELECT id, name, email, role, status, created_at FROM users WHERE role != 'admin' ORDER BY created_at DESC");
-    res.json(users);
+    const { rows } = await pool.query("SELECT id, name, email, role, status, created_at FROM users WHERE role != 'admin' ORDER BY created_at DESC");
+    res.json(rows);
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -644,13 +714,13 @@ app.put('/api/admin/users/:id', authenticateToken, adminOnly, async (req, res) =
     if (role && !['user', 'tutor'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
     if (status && !['active', 'inactive'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
 
-    const [[target]] = await pool.query('SELECT role FROM users WHERE id = ?', [req.params.id]);
-    if (!target || target.role === 'admin') return res.status(403).json({ error: 'Cannot modify admin users' });
+    const { rows: targets } = await pool.query('SELECT role FROM users WHERE id = $1', [req.params.id]);
+    if (targets.length === 0 || targets[0].role === 'admin') return res.status(403).json({ error: 'Cannot modify admin users' });
 
-    const [existing] = await pool.query('SELECT id FROM users WHERE email = ? AND id != ?', [email, req.params.id]);
+    const { rows: existing } = await pool.query('SELECT id FROM users WHERE email = $1 AND id != $2', [email, req.params.id]);
     if (existing.length > 0) return res.status(400).json({ error: 'Email already in use' });
 
-    await pool.query('UPDATE users SET name = ?, email = ?, role = COALESCE(?, role), status = COALESCE(?, status) WHERE id = ?',
+    await pool.query('UPDATE users SET name = $1, email = $2, role = COALESCE($3, role), status = COALESCE($4, status) WHERE id = $5',
       [name, email, role || null, status || null, req.params.id]);
     res.json({ success: true });
   } catch (err) {
@@ -662,10 +732,10 @@ app.delete('/api/admin/users/:id', authenticateToken, adminOnly, async (req, res
   try {
     if (parseInt(req.params.id) === req.user.id) return res.status(400).json({ error: 'Cannot delete your own account' });
 
-    const [[target]] = await pool.query('SELECT role FROM users WHERE id = ?', [req.params.id]);
-    if (!target || target.role === 'admin') return res.status(403).json({ error: 'Cannot delete admin users' });
+    const { rows: targets } = await pool.query('SELECT role FROM users WHERE id = $1', [req.params.id]);
+    if (targets.length === 0 || targets[0].role === 'admin') return res.status(403).json({ error: 'Cannot delete admin users' });
 
-    await pool.query('DELETE FROM users WHERE id = ?', [req.params.id]);
+    await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -676,30 +746,33 @@ app.delete('/api/admin/users/:id', authenticateToken, adminOnly, async (req, res
 
 app.get('/api/admin/stats', authenticateToken, adminOnly, async (req, res) => {
   try {
-    const [[totalUsers]] = await pool.query("SELECT COUNT(*) AS count FROM users WHERE role IN ('user', 'tutor')");
-    const [[totalReports]] = await pool.query('SELECT COUNT(*) AS count FROM reports');
-    const [[pendingReports]] = await pool.query("SELECT COUNT(*) AS count FROM reports WHERE status = 'pending'");
-    const [[totalNotifications]] = await pool.query('SELECT COUNT(*) AS count FROM notifications');
-    const [[totalTutors]] = await pool.query('SELECT COUNT(*) AS count FROM tutors');
-    const [[activeTutors]] = await pool.query("SELECT COUNT(*) AS count FROM tutors WHERE status = 'active'");
-    const [[totalLearners]] = await pool.query('SELECT COUNT(*) AS count FROM learners');
-    const [[activeLearners]] = await pool.query("SELECT COUNT(*) AS count FROM learners WHERE status = 'active'");
-    const [[totalSessions]] = await pool.query('SELECT COUNT(*) AS count FROM sessions');
-    const [[scheduledSessions]] = await pool.query("SELECT COUNT(*) AS count FROM sessions WHERE status = 'scheduled'");
+    const [totalUsers, totalReports, pendingReports, totalNotifications, totalTutors, activeTutors, totalLearners, activeLearners, totalSessions, scheduledSessions] = await Promise.all([
+      pool.query("SELECT COUNT(*) AS count FROM users WHERE role IN ('user', 'tutor')"),
+      pool.query('SELECT COUNT(*) AS count FROM reports'),
+      pool.query("SELECT COUNT(*) AS count FROM reports WHERE status = 'pending'"),
+      pool.query('SELECT COUNT(*) AS count FROM notifications'),
+      pool.query('SELECT COUNT(*) AS count FROM tutors'),
+      pool.query("SELECT COUNT(*) AS count FROM tutors WHERE status = 'active'"),
+      pool.query('SELECT COUNT(*) AS count FROM learners'),
+      pool.query("SELECT COUNT(*) AS count FROM learners WHERE status = 'active'"),
+      pool.query('SELECT COUNT(*) AS count FROM sessions'),
+      pool.query("SELECT COUNT(*) AS count FROM sessions WHERE status = 'scheduled'"),
+    ]);
 
     res.json({
-      totalUsers: totalUsers.count,
-      totalReports: totalReports.count,
-      pendingReports: pendingReports.count,
-      totalNotifications: totalNotifications.count,
-      totalTutors: totalTutors.count,
-      activeTutors: activeTutors.count,
-      totalLearners: totalLearners.count,
-      activeLearners: activeLearners.count,
-      totalSessions: totalSessions.count,
-      scheduledSessions: scheduledSessions.count,
+      totalUsers: parseInt(totalUsers.rows[0].count),
+      totalReports: parseInt(totalReports.rows[0].count),
+      pendingReports: parseInt(pendingReports.rows[0].count),
+      totalNotifications: parseInt(totalNotifications.rows[0].count),
+      totalTutors: parseInt(totalTutors.rows[0].count),
+      activeTutors: parseInt(activeTutors.rows[0].count),
+      totalLearners: parseInt(totalLearners.rows[0].count),
+      activeLearners: parseInt(activeLearners.rows[0].count),
+      totalSessions: parseInt(totalSessions.rows[0].count),
+      scheduledSessions: parseInt(scheduledSessions.rows[0].count),
     });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -709,8 +782,7 @@ app.get('/api/admin/stats', authenticateToken, adminOnly, async (req, res) => {
 initDB()
   .then(() => app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`)))
   .catch(err => {
-    console.error('MySQL connection failed:', err.message);
-    console.error('Make sure MySQL is running and the database "tutoring_db" exists.');
-    console.error('Run: mysql -u root < backend/tutoring.sql');
+    console.error('PostgreSQL connection failed:', err.message);
+    console.error('Make sure DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD/DB_NAME are set correctly.');
     process.exit(1);
   });
