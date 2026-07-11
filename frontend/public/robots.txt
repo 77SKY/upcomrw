@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://upcomrw-frontend.onrender.com/sitemap.xml
