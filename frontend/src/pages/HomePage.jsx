@@ -16,7 +16,7 @@ const services = [
   { title: "Mathematics", description: "From algebra to calculus, master every concept with personalized guidance from expert tutors.", icon: "📐", color: "from-rw-blue to-rw-blue-dark" },
   { title: "Science", description: "Explore physics, chemistry, and biology through engaging experiments and clear explanations.", icon: "🔬", color: "from-rw-green to-rw-green-dark" },
   { title: "Languages", description: "Become fluent in any language with native speakers and immersive learning techniques.", icon: "🌍", color: "from-rw-yellow to-rw-yellow-dark" },
-  { title: "Test Prep", description: "ACE your SAT, ACT, GRE, or any standardized test with proven strategies and practice.", icon: "📝", color: "from-rw-blue to-rw-green" },
+  { title: "Test Prep", description: "Get ready for primary and secondary school exams with guided practice, mock tests, and effective study techniques.", icon: "📝", color: "from-rw-blue to-rw-green" },
   { title: "Writing", description: "Craft compelling essays and develop powerful writing skills that stand out.", icon: "✍️", color: "from-rw-green to-rw-blue" },
   { title: "Programming", description: "Learn to code in Python, JavaScript, and more with hands-on projects and mentorship.", icon: "💻", color: "from-rw-blue-dark to-rw-green-dark" },
 ];

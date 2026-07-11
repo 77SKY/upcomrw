@@ -33,14 +33,8 @@ const services = [
     title: 'Test Preparation',
     icon: '📝',
     color: 'from-rw-yellow to-rw-yellow-dark',
-    description: 'ACE your SAT, ACT, GRE, or any standardized test with proven strategies, practice exams, and personalized study plans designed to maximize your score.',
-    features: [
-      'Comprehensive coverage of all test sections',
-      'Timed practice exams with detailed analytics',
-      'Proven test-taking strategies and tips',
-      'Targeted drills for weak areas',
-      'Score improvement guarantee',
-    ],
+    description: 'Prepare for primary and secondary school exams including national tests, end-of-term assessments, and entrance exams with guided practice and proven study techniques.',
+    features: [],
   },
   {
     title: 'Homework Help',
@@ -109,6 +103,7 @@ export default function ServicesPage() {
               </div>
               <div className="p-6 sm:p-8">
                 <p className="text-gray-600 dark:text-gray-400 leading-relaxed mb-6">{s.description}</p>
+                {s.features.length > 0 && (
                 <ul className="space-y-3">
                   {s.features.map((f, j) => (
                     <li key={j} className="flex items-start gap-3 text-sm text-gray-700 dark:text-gray-300">
@@ -119,6 +114,7 @@ export default function ServicesPage() {
                     </li>
                   ))}
                 </ul>
+                )}
               </div>
             </div>
           ))}
@@ -132,7 +128,7 @@ export default function ServicesPage() {
               <h2 className="text-2xl sm:text-3xl font-extrabold text-gray-900 dark:text-white">About UPCOMRWANDA</h2>
             </div>
             <p className="text-gray-700 dark:text-gray-300 leading-relaxed text-lg mb-4">
-              UPCOMRWANDA is a leading tutoring company dedicated to providing high-quality, personalized education to students of all levels. We connect learners with expert tutors for one-on-one sessions, group classes, test preparation, and academic coaching.
+              UPCOMRWANDA is a leading tutoring company dedicated to providing high-quality, personalized education to students of all levels. We connect learners with expert tutors for one-on-one sessions, group classes, and academic coaching.
             </p>
             <p className="text-gray-600 dark:text-gray-400 leading-relaxed">
               Our mission is to make quality education accessible to everyone, empowering students worldwide to achieve their academic goals and unlock their full potential. With over 500 expert tutors and a proven track record of student success, we are committed to transforming the way people learn.

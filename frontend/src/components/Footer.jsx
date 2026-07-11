@@ -9,7 +9,7 @@ export default function Footer() {
               <span className="text-xl font-bold text-white">UPCOMRWANDA</span>
             </div>
             <p className="text-sm leading-relaxed mb-4">
-              UPCOMRWANDA is a tutoring company that focuses on providing high-quality, personalized education to students of all levels. We connect learners with expert tutors for one-on-one sessions, group classes, test preparation, and academic coaching.
+              UPCOMRWANDA is a tutoring company that focuses on providing high-quality, personalized education to students of all levels. We connect learners with expert tutors for one-on-one sessions, group classes, and academic coaching.
             </p>
             <p className="text-sm leading-relaxed">
               Our mission is to make quality education accessible to everyone, empowering students worldwide to achieve their academic goals and unlock their full potential.
