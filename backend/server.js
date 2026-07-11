@@ -18,7 +18,10 @@ const poolConfig = dbUrl
 
 const pool = new Pool(poolConfig);
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || true,
+  credentials: true
+}));
 app.use(express.json());
 
 async function initDB() {
@@ -799,6 +802,18 @@ app.use((req, res, next) => {
     if (!res.headersSent) res.status(500).json({ error: 'Database not ready' });
   });
 });
+
+const path = require('path');
+const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
+const fs = require('fs');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+}
+
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 if (require.main === module) {
   initDB()

@@ -5,6 +5,8 @@ services:
     rootDir: backend
     buildCommand: npm install
     startCommand: node server.js
+    plan: free
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
@@ -15,12 +17,12 @@ services:
           name: upcomrw-db
           property: connectionString
 
-  - type: web
+  - type: static
     name: upcomrw-frontend
-    runtime: static
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
+    plan: free
     routes:
       - type: rewrite
         source: /*
