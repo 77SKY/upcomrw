@@ -5,7 +5,6 @@ services:
     rootDir: backend
     buildCommand: npm install
     startCommand: node server.js
-    plan: free
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
@@ -23,7 +22,6 @@ services:
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
-    plan: free
     routes:
       - type: rewrite
         source: /*
