@@ -37,12 +37,15 @@ async function initDB() {
     )
   `);
 
+  const adminEmail = process.env.ADMIN_EMAIL || 'admin@olivier.com';
+  const adminPassword = process.env.ADMIN_PASSWORD || 'Olivier0790647563';
+
   await pool.query("DELETE FROM users WHERE email = 'admin@upcomrw.com'");
 
-  const { rows: existingAdmin } = await pool.query("SELECT id FROM users WHERE email = 'admin@olivier.com'");
+  const { rows: existingAdmin } = await pool.query('SELECT id FROM users WHERE email = $1', [adminEmail]);
   if (existingAdmin.length === 0) {
-    const hashed = bcrypt.hashSync('Olivier0790647563', 10);
-    await pool.query('INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4)', ['Admin', 'admin@olivier.com', hashed, 'admin']);
+    const hashed = bcrypt.hashSync(adminPassword, 10);
+    await pool.query('INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4)', ['Admin', adminEmail, hashed, 'admin']);
     console.log('Default admin user created');
   }
 
